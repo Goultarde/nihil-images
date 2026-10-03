@@ -1,0 +1,18 @@
+{
+  "version": 2,
+  "enabled_tools": [
+    "asciinema",
+    "bloodyad",
+    "fzf",
+    "gdb",
+    "nano",
+    "neovim",
+    "nihil-history",
+    "nihil-ntp",
+    "tmux",
+    "vim",
+    "whois",
+    "yazi",
+    "zoxide"
+  ]
+}
