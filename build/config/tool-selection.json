@@ -1,6 +1,7 @@
 {
   "version": 2,
   "enabled_tools": [
+    "adidnsdump",
     "asciinema",
     "fzf",
     "gdb",
