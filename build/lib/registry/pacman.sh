@@ -13,14 +13,18 @@ install_pacman_tool() {
 
     if command -v "$pkg_name" >/dev/null 2>&1; then
         colorecho "  ✓ $pkg_name already installed (pacman)"
+        add-aliases "$pkg_name"
+        add-history "$pkg_name"
         return 0
     fi
 
     colorecho "  → Installing $pkg_name via pacman"
-    pacman -Sy --noconfirm && \
-    pacman -S --noconfirm --needed "$pkg_name" 2>/dev/null || {
+    retry-command 3 "pacman install $pkg_name" bash -c \
+        'pacman -Sy --noconfirm && pacman -S --noconfirm --needed "$1" 2>/dev/null' \
+        _ "$pkg_name" || {
         colorecho "  ⟳ Retrying $pkg_name with --overwrite (pip/pacman file conflicts)"
-        pacman -S --noconfirm --needed --overwrite '/usr/lib/python3.*/site-packages/*' "$pkg_name" || {
+        retry-command 3 "pacman install $pkg_name with --overwrite" \
+            pacman -S --noconfirm --needed --overwrite '/usr/lib/python3.*/site-packages/*' "$pkg_name" || {
             colorecho "  ✗ Warning: Failed to install $pkg_name via pacman"
             return 1
         }
@@ -41,12 +45,20 @@ install_pacman_tools() {
     fi
 
     colorecho "Installing packages via pacman: ${packages[*]}"
-    pacman -Sy --noconfirm && \
-    pacman -S --noconfirm --needed "${packages[@]}" 2>/dev/null || {
+    retry-command 3 "pacman install packages" bash -c \
+        'pacman -Sy --noconfirm && pacman -S --noconfirm --needed "$@" 2>/dev/null' \
+        _ "${packages[@]}" || {
         colorecho "  ⟳ Retrying with --overwrite (pip/pacman file conflicts)"
-        pacman -S --noconfirm --needed --overwrite '/usr/lib/python3.*/site-packages/*' "${packages[@]}" || {
+        retry-command 3 "pacman install packages with --overwrite" \
+            pacman -S --noconfirm --needed --overwrite '/usr/lib/python3.*/site-packages/*' "${packages[@]}" || {
             colorecho "Warning: Some packages failed to install"
             return 1
         }
     }
+
+    local pkg
+    for pkg in "${packages[@]}"; do
+        add-aliases "$pkg"
+        add-history "$pkg"
+    done
 }

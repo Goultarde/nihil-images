@@ -23,6 +23,11 @@ function install_searchsploit() {
     fi
 }
 
+function install_ansible() {
+    install_pacman_tool "ansible"
+    add-history "ansible"
+}
+
 
 # ---------------------------------------------------------------------------
 # Module entry point
@@ -38,12 +43,17 @@ function install_cyberchef() {
 
     colorecho "  → Installing CyberChef (offline)"
     mkdir -p "$install_dir"
+    local release_json="/tmp/cyberchef-release.json"
     local latest_url
-    latest_url=$(curl -s https://api.github.com/repos/gchq/CyberChef/releases/latest | \
-        grep "browser_download_url.*CyberChef.*\.zip" | head -1 | cut -d'"' -f4)
+    if ! download-retry "https://api.github.com/repos/gchq/CyberChef/releases/latest" "$release_json"; then
+        colorecho "  ✗ Warning: Failed to fetch CyberChef release metadata"
+        return 1
+    fi
+    latest_url=$(grep "browser_download_url.*CyberChef.*\.zip" "$release_json" | head -1 | cut -d'"' -f4)
+    rm -f "$release_json"
     if [ -n "$latest_url" ]; then
-        pacman -S --noconfirm --needed unzip 2>/dev/null || true
-        curl -sSL "$latest_url" -o /tmp/cyberchef.zip && \
+        install_pacman_tool unzip || true
+        download-retry "$latest_url" /tmp/cyberchef.zip && \
         unzip -o /tmp/cyberchef.zip -d "$install_dir" && \
         rm -f /tmp/cyberchef.zip
         colorecho "  ✓ CyberChef installed at $install_dir"
@@ -125,15 +135,19 @@ function install_grc() {
     local grc_assets="/opt/nihil/build/assets/grc"
     cp "${grc_assets}/grc.conf" /etc/grc.conf
     cp "${grc_assets}"/conf.* /usr/share/grc/
+    add-aliases "grc"
 }
 
 function install_sqlitebrowser() {
     install_pacman_tool "sqlitebrowser"
+    install_pacman_tool "sqlite"
+    add-history "sqlitebrowser"
 }
 
 function install_mongosh() {
-    install_pacman_tool "mongosh"
-    install_pacman_tool "mongodb-tools"
+    install_pacman_tool "mongosh" || install_pacman_tool "mongodb-mongosh" || \
+        colorecho "  ✗ Warning: mongosh package not available"
+    install_pacman_tool "mongodb-tools" || colorecho "  ✗ Warning: mongodb-tools package not available"
     add-aliases "mongosh"
     add-history "mongosh"
 }
@@ -164,17 +178,22 @@ function install_gitleaks() {
     arch=$(uname -m)
     [ "$arch" = "aarch64" ] && arch="arm64" || arch="x64"
 
+    local release_json="/tmp/gitleaks-release.json"
     local url
-    url=$(curl -Ls "https://api.github.com/repos/gitleaks/gitleaks/releases/latest" \
-        | grep "browser_download_url.*gitleaks.*linux_${arch}.*tar\.gz" \
+    if ! download-retry "https://api.github.com/repos/gitleaks/gitleaks/releases/latest" "$release_json"; then
+        colorecho "  ✗ Warning: Failed to fetch gitleaks release metadata"
+        return 0
+    fi
+    url=$(grep "browser_download_url.*gitleaks.*linux_${arch}.*tar\.gz" "$release_json" \
         | grep -o 'https://[^"]*' | head -1)
+    rm -f "$release_json"
 
     if [ -z "$url" ]; then
         colorecho "  ✗ Warning: Failed to resolve gitleaks download URL"
         return 0
     fi
 
-    curl -fsSL "$url" -o /tmp/gitleaks.tar.gz || {
+    download-retry "$url" /tmp/gitleaks.tar.gz || {
         colorecho "  ✗ Warning: Failed to download gitleaks"
         return 0
     }
@@ -187,11 +206,30 @@ function install_gitleaks() {
     colorecho "  ✓ gitleaks installed"
 }
 
+function install_aws_cli() {
+    if command -v aws >/dev/null 2>&1; then
+        colorecho "  ✓ aws already installed"
+        add-aliases "aws"
+        add-history "aws"
+        return 0
+    fi
+
+    # Package is aws-cli-v2 (extra repo); it ships the "aws" binary.
+    install_pacman_tool "aws-cli-v2" || return 1
+
+    add-aliases "aws"
+    add-history "aws"
+}
+
 function install_rdate() {
-    pacman -S --noconfirm --needed libbsd autoconf automake make gcc
+    install_pacman_tools libbsd autoconf automake make gcc
     local tmpdir
     tmpdir=$(mktemp -d)
-    git clone --depth 1 https://github.com/resurrecting-open-source-projects/openrdate.git "$tmpdir/rdate"
+    git-clone-retry "https://github.com/resurrecting-open-source-projects/openrdate.git" "$tmpdir/rdate" 1 || {
+        rm -rf "$tmpdir"
+        colorecho "  ✗ Warning: Failed to clone openrdate"
+        return 1
+    }
     cd "$tmpdir/rdate"
     ./autogen.sh && ./configure && make && make install
     cd /
@@ -207,6 +245,7 @@ function install_mod_misc() {
     colorecho "Installing misc red-team tools"
 
     install_searchsploit
+    install_ansible
     install_cyberchef
     install_firefox
     install_chromium
@@ -220,6 +259,7 @@ function install_mod_misc() {
     install_rsync
     install_wes
     install_gitleaks
+    install_aws_cli
 
     colorecho "Misc red-team tools installation finished"
 }

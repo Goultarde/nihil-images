@@ -6,6 +6,7 @@ nihil::import lib/common
 nihil::import lib/registry/pipx
 nihil::import lib/registry/pacman
 nihil::import lib/registry/go
+nihil::import lib/registry/aur
 
 # ---------------------------------------------------------------------------
 # Individual install functions
@@ -38,8 +39,7 @@ function install_jd-gui() {
     fi
     colorecho "  → Installing jd-gui (Java decompiler)"
     mkdir -p "$jar_dir"
-    if curl -sSLf -o "$jar_file" \
-        "https://github.com/java-decompiler/jd-gui/releases/download/v1.6.6/jd-gui-1.6.6.jar"; then
+    if download-retry "https://github.com/java-decompiler/jd-gui/releases/download/v1.6.6/jd-gui-1.6.6.jar" "$jar_file"; then
         local java_bin
         java_bin=$(command -v java)
         printf '#!/bin/bash\nexec %s -jar %s "$@"\n' "$java_bin" "$jar_file" \
@@ -50,28 +50,51 @@ function install_jd-gui() {
     fi
 }
 
+function configure_ida_launcher() {
+    cat >/opt/tools/bin/ida64 <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Qt refuses Wayland runtime directories that are missing or not private to the
+# current user. Containers often see the host runtime directory with unsuitable
+# ownership/mode, so keep IDA on a clean per-container runtime directory.
+if [ -z "${XDG_RUNTIME_DIR:-}" ] || [ ! -d "$XDG_RUNTIME_DIR" ] || [ "$(stat -c %a "$XDG_RUNTIME_DIR" 2>/dev/null || true)" != "700" ]; then
+    export XDG_RUNTIME_DIR=/tmp/runtime-root
+    mkdir -p "$XDG_RUNTIME_DIR"
+    chmod 700 "$XDG_RUNTIME_DIR"
+fi
+
+exec /usr/bin/ida64 "$@"
+EOF
+    chmod +x /opt/tools/bin/ida64
+    ln -sf /opt/tools/bin/ida64 /opt/tools/bin/ida
+}
+
 function install_ida() {
-    # IDA Free (proprietary, GUI only, x86_64). Unattended installer drops the
-    # disassembler at /opt/tools/idafree/ida64; expose it on PATH. Needs X to run.
+    # IDA Free (proprietary, GUI only, x86_64). The live Hex-Rays direct URL is
+    # no longer reliable for unattended builds; the AUR package pins the archived
+    # 8.4 installer and verifies its checksum.
     if [ "$(uname -m)" != "x86_64" ]; then
         colorecho "  ✗ Skipping IDA Free: only supported on x86_64"
         return 0
     fi
-    if [ -x /opt/tools/idafree/ida64 ]; then
+    if [ -x /usr/bin/ida64 ] || [ -x /opt/ida-free/ida64 ]; then
         colorecho "  ✓ IDA Free already installed"
+        configure_ida_launcher
+        add-aliases "ida"
+        add-history "ida"
         return 0
     fi
-    colorecho "  → Installing IDA Free (GUI)"
-    if curl -sSLf -o /tmp/idafree.run "https://out7.hex-rays.com/files/idafree84_linux.run"; then
-        chmod +x /tmp/idafree.run
-        /tmp/idafree.run --mode unattended --prefix /opt/tools/idafree \
-            && ln -sf /opt/tools/idafree/ida64 /opt/tools/bin/ida64
-        rm -f /tmp/idafree.run
-    else
-        colorecho "  ✗ Warning: Failed to download IDA Free"
-    fi
-}
 
+    colorecho "  → Installing IDA Free via AUR"
+    install_aur_tool "ida-free" "ida64" || {
+        colorecho "  ✗ Warning: Failed to install IDA Free from AUR"
+        return 1
+    }
+    configure_ida_launcher
+    add-aliases "ida"
+    add-history "ida"
+}
 function install_binaryninja() {
     # Binary Ninja Free (proprietary, GUI only, x86_64, ~450 MB download).
     # Heavy: gates the largest single tool in the image. Needs X to run.
@@ -84,7 +107,7 @@ function install_binaryninja() {
         return 0
     fi
     colorecho "  → Installing Binary Ninja Free (GUI, ~450 MB)"
-    if curl -sSLf -o /tmp/binja.zip "https://cdn.binary.ninja/installers/binaryninja_free_linux.zip"; then
+    if download-retry "https://cdn.binary.ninja/installers/binaryninja_free_linux.zip" /tmp/binja.zip; then
         unzip -q -o /tmp/binja.zip -d /opt/tools \
             && ln -sf /opt/tools/binaryninja/binaryninja /opt/tools/bin/binaryninja
         rm -f /tmp/binja.zip
@@ -102,12 +125,14 @@ function install_pycdc() {
 
     if command -v pycdc > /dev/null 2>&1; then
         colorecho "  ✓ pycdc already installed"
+        add-history "pycdc"
+        add-history "pycdas"
         return 0
     fi
 
     colorecho "  → Installing pycdc (Python bytecode decompiler)"
-    pacman -S --noconfirm --needed cmake || true
-    git clone --depth 1 https://github.com/zrax/pycdc.git "$install_dir" || {
+    install_pacman_tool cmake || true
+    git-clone-retry "https://github.com/zrax/pycdc.git" "$install_dir" 1 || {
         colorecho "  ✗ Warning: Failed to clone pycdc"
         return 1
     }
@@ -118,6 +143,8 @@ function install_pycdc() {
     ln -sf "$install_dir/pycdc" /opt/tools/bin/pycdc
     ln -sf "$install_dir/pycdas" /opt/tools/bin/pycdas
     cd - > /dev/null
+    add-history "pycdc"
+    add-history "pycdas"
 
     colorecho "  ✓ pycdc installed"
 }

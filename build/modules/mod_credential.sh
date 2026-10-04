@@ -8,6 +8,7 @@ nihil::import lib/registry/cargo
 nihil::import lib/registry/pacman
 nihil::import lib/registry/aur
 nihil::import lib/registry/gem
+nihil::import lib/registry/git
 
 # ---------------------------------------------------------------------------
 # Individual install functions
@@ -15,6 +16,25 @@ nihil::import lib/registry/gem
 
 function install_pypykatz() {
     install_pipx_tool "pypykatz" "pypykatz"
+}
+
+function install_defaultcreds_cheat_sheet() {
+    install_pipx_tool "creds" "defaultcreds-cheat-sheet"
+}
+
+function install_trufflehog() {
+    if command -v trufflehog >/dev/null 2>&1; then
+        colorecho "  ✓ trufflehog already installed"
+        add-history "trufflehog"
+        return 0
+    fi
+
+    colorecho "  → Installing trufflehog"
+    curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b /usr/local/bin || {
+        colorecho "  ✗ Warning: Failed to install trufflehog"
+        return 1
+    }
+    add-history "trufflehog"
 }
 
 function install_binwalk() {
@@ -27,13 +47,31 @@ function install_haiti() {
 
 function install_john() {
     install_pacman_tool "john"
+    add-history "john"
+}
+
+function install_xortool() {
+    install_pipx_tool "xortool" "xortool"
+    if command -v xortool-xor >/dev/null 2>&1; then
+        add-history "xortool"
+        return 0
+    fi
+    local pipx_bin_dir
+    pipx_bin_dir="$(pipx environment --value PIPX_BIN_DIR 2>/dev/null || printf '%s\n' /root/.local/bin)"
+    if [ -x "$pipx_bin_dir/xortool-xor" ]; then
+        ln -sf "$pipx_bin_dir/xortool-xor" /usr/bin/xortool-xor || true
+    fi
+    add-history "xortool"
 }
 
 function install_hashcat() {
     install_pacman_tool "hashcat"
     install_pacman_tool "hashcat-utils"
-    git clone --depth=1 https://github.com/hashcat/hashcat /tmp/hashcat-src
-    cp -r /tmp/hashcat-src/rules /usr/share/hashcat/rules
+    git-clone-retry "https://github.com/hashcat/hashcat" /tmp/hashcat-src 1 || {
+        colorecho "  ✗ Warning: Failed to clone hashcat rules"
+        return 0
+    }
+    cp -r /tmp/hashcat-src/rules /usr/share/hashcat/rules || true
     rm -rf /tmp/hashcat-src
 }
 
@@ -62,7 +100,12 @@ function install_mod_credential() {
 
     colorecho "  [pipx] Credential tools:"
     install_pypykatz
+    install_defaultcreds_cheat_sheet
     install_name_that_hash
+    install_xortool
+
+    colorecho "  [binary] Secret scanners:"
+    install_trufflehog
 
     colorecho "  [gem] Credential tools:"
     install_haiti

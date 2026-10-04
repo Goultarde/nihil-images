@@ -17,13 +17,17 @@ install_download_tool() {
 
     if command -v "$cmd_name" >/dev/null 2>&1; then
         colorecho "  ✓ $cmd_name already installed (download)"
+        add-aliases "$cmd_name"
+        add-history "$cmd_name"
         return 0
     fi
 
     colorecho "  → Installing $cmd_name via curl/wget ($url)"
     mkdir -p "$INSTALL_DIR"
-    if curl -sSLf "$url" -o "$dest" 2>/dev/null || wget -q -O "$dest" "$url" 2>/dev/null; then
+    if download-retry "$url" "$dest"; then
         chmod +x "$dest"
+        add-aliases "$cmd_name"
+        add-history "$cmd_name"
         colorecho "  ✓ $cmd_name installed"
         return 0
     fi
@@ -107,7 +111,7 @@ install_tar_tool() {
 
     # Télécharger l'archive
     local tmp_file="/tmp/${tool_name}-${version}-${arch}.tar.gz"
-    if ! curl -sSLf -L "$url" -o "$tmp_file" 2>/dev/null && ! wget -q -O "$tmp_file" "$url" 2>/dev/null; then
+    if ! download-retry "$url" "$tmp_file"; then
         colorecho "  ✗ Warning: Failed to download $tool_name"
         rm -f "$tmp_file"
         return 1

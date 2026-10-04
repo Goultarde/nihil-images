@@ -20,6 +20,7 @@ function install_nmap() {
 
 function install_netcat() {
     install_pacman_tool "openbsd-netcat"
+    add-history "netcat"
 }
 
 function install_socat() {
@@ -54,6 +55,44 @@ function install_zone_dnsenum() {
     install_pipx_tool_git "zone-dnsenum" "https://github.com/Goultarde/Zone-DNSenum"
 }
 
+function install_dnsrecon() {
+    install_pipx_tool "dnsrecon" "dnsrecon"
+}
+
+function install_dnsenum() {
+    # dnsenum is not available in the official repositories used by CI and
+    # its AUR package depends on BlackArch-only Perl modules. Install the
+    # upstream script and resolve its Perl dependencies through CPAN.
+    install_pacman_tools "perl-net-dns" "perl-net-ip" "perl-xml-writer" \
+        "perl-module-build" "perl-canary-stability" "perl-common-sense" "perl-anyevent" \
+        "cpanminus"
+    local perl5lib="/usr/local/lib/perl5"
+    if ! retry-command 3 "CPAN dependencies for dnsenum" \
+        env PERL_MM_USE_DEFAULT=1 PERL_CANARY_STABILITY_NOPROMPT=1 \
+            PERL_MM_OPT="INSTALL_BASE=/usr/local" \
+            PERL_MB_OPT="--install_base /usr/local" \
+            /usr/bin/vendor_perl/cpanm --notest --local-lib=/usr/local Net::Netmask String::Random; then
+        # CPAN can return a failure after completing the installation (for
+        # example when a test-only dependency cannot be resolved). Continue
+        # only when dnsenum's runtime modules are actually available.
+        if ! PERL5LIB="$perl5lib" perl -MNet::Netmask -MString::Random -e1 >/dev/null 2>&1; then
+            colorecho "  ✗ Warning: Failed to install dnsenum Perl dependencies"
+            return 1
+        fi
+    fi
+    install_git_tool "dnsenum" \
+        "https://github.com/fwaeytens/dnsenum.git" \
+        "dnsenum.pl" \
+        "chmod +x dnsenum.pl" || return 1
+    # CPAN's INSTALL_BASE is outside Perl's default @INC; preserve it in the
+    # command wrapper so dnsenum works from every shell.
+    printf '%s\n' '#!/bin/sh' \
+        'export PERL5LIB="/usr/local/lib/perl5:${PERL5LIB:-}"' \
+        'exec /usr/local/share/dnsenum/dnsenum.pl "$@"' \
+        > "${GIT_BIN_DIR}/dnsenum"
+    chmod +x "${GIT_BIN_DIR}/dnsenum"
+}
+
 function install_ligolo_ng() {
     local arch goarch tag version url
     arch="$(uname -m)"
@@ -64,7 +103,7 @@ function install_ligolo_ng() {
     esac
 
     # Resolve latest tag via redirect (no API, no rate limit)
-    tag=$(curl -Ls -o /dev/null -w '%{url_effective}' "https://github.com/nicocha30/ligolo-ng/releases/latest" | sed 's:.*/::' || true)
+    tag=$(retry-command 3 "resolve ligolo-ng latest tag" curl -Ls -o /dev/null -w '%{url_effective}' "https://github.com/nicocha30/ligolo-ng/releases/latest" | sed 's:.*/::' || true)
     if [ -z "$tag" ]; then
         colorecho "  ✗ Warning: Failed to resolve ligolo-ng latest tag"
         return 0
@@ -74,10 +113,13 @@ function install_ligolo_ng() {
     # Asset format: ligolo-ng_proxy_0.8.3_linux_amd64.tar.gz
     url="https://github.com/nicocha30/ligolo-ng/releases/download/${tag}/ligolo-ng_proxy_${version}_linux_${goarch}.tar.gz"
 
-    if ! curl -fsSL "$url" | tar -xz -C /tmp proxy 2>/dev/null; then
+    local archive="/tmp/ligolo-ng-proxy.tar.gz"
+    if ! download-retry "$url" "$archive" || ! tar -xzf "$archive" -C /tmp proxy 2>/dev/null; then
+        rm -f "$archive"
         colorecho "  ✗ Warning: Failed to download/extract ligolo-ng proxy"
         return 0
     fi
+    rm -f "$archive"
     mv /tmp/proxy /opt/tools/bin/ligolo-ng
     chmod +x /opt/tools/bin/ligolo-ng
     add-history "ligolo-ng"
@@ -103,7 +145,13 @@ function install_ngrok() {
         aarch64) equinox_arch="arm64" ;;
     esac
     url="https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-${equinox_arch}.tgz"
-    curl -fsSL "$url" | tar -xz -C /tmp ngrok
+    local archive="/tmp/ngrok.tgz"
+    if ! download-retry "$url" "$archive" || ! tar -xzf "$archive" -C /tmp ngrok 2>/dev/null; then
+        rm -f "$archive"
+        colorecho "  ✗ Warning: Failed to download/extract ngrok"
+        return 0
+    fi
+    rm -f "$archive"
     mv /tmp/ngrok /opt/tools/bin/ngrok
     chmod +x /opt/tools/bin/ngrok
     add-history "ngrok"
@@ -119,7 +167,11 @@ function install_masscan() {
 }
 
 function install_netdiscover() {
-    install_aur_tool "netdiscover" "netdiscover"
+    install_pacman_tools "autoconf" "automake" "make" "gcc" "libpcap"
+    install_git_tool "netdiscover" \
+        "https://github.com/netdiscover-scanner/netdiscover.git" \
+        "src/netdiscover" \
+        "./autogen.sh && ./configure && make"
 }
 
 function install_nmap_parse_output() {
@@ -131,6 +183,7 @@ function install_nmap_parse_output() {
 
 function install_proxychains() {
     install_pacman_tool "proxychains-ng"
+    add-history "proxychains"
 }
 
 function install_rustscan() {
@@ -151,10 +204,29 @@ function install_tcpdump() {
 
 function install_xfreerdp() {
     install_pacman_tool "freerdp"
+    add-history "xfreerdp"
+}
+
+function install_rdesktop() {
+    install_pacman_tool "rdesktop"
 }
 
 function install_nfs_utils() {
     install_pacman_tool "nfs-utils"
+}
+
+function install_snmpwalk() {
+    if command -v snmpwalk >/dev/null 2>&1; then
+        colorecho "  ✓ snmpwalk already installed (pacman)"
+    else
+        install_pacman_tool "net-snmp"
+    fi
+    add-aliases "snmpwalk"
+    add-history "snmpwalk"
+}
+
+function install_onesixtyone() {
+    install_git_tool "onesixtyone" "https://github.com/trailofbits/onesixtyone.git" "onesixtyone" "make"
 }
 
 # ---------------------------------------------------------------------------
@@ -179,6 +251,7 @@ function install_mod_network() {
 
     colorecho "  [pipx] Network tools:"
     install_zone_dnsenum
+    install_dnsrecon
 
     colorecho "  [bin] Tunneling tools:"
     install_ligolo_ng
@@ -186,8 +259,7 @@ function install_mod_network() {
 
     install_chisel
     install_masscan
-    # install_netdiscover  # disabled: AUR build fails fetching the IEEE OUI db
-    # (http://standards-oui.ieee.org/oui/oui.txt) from CI, which aborts the build
+    install_netdiscover
     install_nmap_parse_output
     install_proxychains
     install_rustscan
@@ -195,7 +267,11 @@ function install_mod_network() {
     install_sshuttle
     install_tcpdump
     install_xfreerdp
+    install_rdesktop
     install_nfs_utils
+    install_dnsenum
+    install_snmpwalk
+    install_onesixtyone
 
     add-aliases "network"
 

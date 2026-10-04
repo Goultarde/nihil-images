@@ -7,6 +7,7 @@ nihil::import lib/registry/pipx
 nihil::import lib/registry/pacman
 nihil::import lib/registry/aur
 nihil::import lib/registry/gem
+nihil::import lib/registry/git
 
 # ---------------------------------------------------------------------------
 # Individual install functions
@@ -14,6 +15,7 @@ nihil::import lib/registry/gem
 
 function install_volatility3() {
     install_pipx_tool "vol" "volatility3"
+    add-history "volatility3"
 }
 
 function install_foremost() {
@@ -33,7 +35,7 @@ function install_exiftool() {
     # perl-image-exiftool installs to /usr/bin/vendor_perl/exiftool (not /usr/bin/exiftool).
     # That path is not in the default PATH, so command -v would miss it.
     # Check the exact path and create an explicit symlink into /opt/tools/bin.
-    pacman -S --noconfirm --needed perl-image-exiftool 2>/dev/null || true
+    install_pacman_tool perl-image-exiftool || true
     if [ -f /usr/bin/vendor_perl/exiftool ]; then
         ln -sf /usr/bin/vendor_perl/exiftool /opt/tools/bin/exiftool
         add-history "exiftool"
@@ -43,10 +45,10 @@ function install_exiftool() {
 
     # pacman unavailable or package not found -- install from GitHub release
     colorecho "  ⟳ pacman fallback: installing exiftool from GitHub release"
-    pacman -S --noconfirm --needed perl 2>/dev/null || true
+    install_pacman_tool perl || true
 
     local tag
-    tag=$(curl -Ls -o /dev/null -w '%{url_effective}' \
+    tag=$(retry-command 3 "resolve exiftool latest tag" curl -Ls -o /dev/null -w '%{url_effective}' \
         "https://github.com/exiftool/exiftool/releases/latest" | sed 's:.*/::' || true)
     if [ -z "$tag" ]; then
         colorecho "  ✗ Warning: Failed to resolve exiftool version"
@@ -54,8 +56,7 @@ function install_exiftool() {
     fi
 
     mkdir -p "$install_dir"
-    curl -fsSL "https://github.com/exiftool/exiftool/archive/refs/tags/${tag}.tar.gz" \
-        -o /tmp/exiftool.tar.gz || {
+    download-retry "https://github.com/exiftool/exiftool/archive/refs/tags/${tag}.tar.gz" /tmp/exiftool.tar.gz || {
         colorecho "  ✗ Warning: Failed to download exiftool"
         return 0
     }
@@ -74,7 +75,8 @@ function install_exiftool() {
 }
 
 function install_steghide() {
-    install_pacman_tool "steghide"
+    install_pacman_tool "steghide" || install_aur_tool "steghide" "steghide" || \
+        colorecho "  ✗ Warning: steghide package not available"
 }
 
 function install_zsteg() {
@@ -86,12 +88,13 @@ function install_stegseek() {
 
     if command -v stegseek > /dev/null 2>&1; then
         colorecho "  ✓ stegseek already installed"
+        add-history "stegseek"
         return 0
     fi
 
     colorecho "  → Installing stegseek (steghide brute-forcer)"
-    pacman -S --noconfirm --needed cmake libjpeg-turbo libmcrypt mhash || true
-    git clone --depth 1 https://github.com/RickdeJager/stegseek.git "$install_dir" || {
+    install_pacman_tools cmake libjpeg-turbo libmcrypt mhash || true
+    git-clone-retry "https://github.com/RickdeJager/stegseek.git" "$install_dir" 1 || {
         colorecho "  ✗ Warning: Failed to clone stegseek"
         return 1
     }
@@ -102,6 +105,7 @@ function install_stegseek() {
     }
     ln -sf "$install_dir/build/src/stegseek" /usr/local/bin/stegseek
     cd - > /dev/null
+    add-history "stegseek"
 
     colorecho "  ✓ stegseek installed"
 }

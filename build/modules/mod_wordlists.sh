@@ -69,7 +69,7 @@ function install_fuzz_txt() {
     fi
 
     colorecho "  → Downloading fuzz.txt"
-    if ! curl -fsSL "$url" -o "$install_path"; then
+    if ! download-retry "$url" "$install_path"; then
         rm -f "$install_path"
         colorecho "  ✗ Warning: Failed to download fuzz.txt"
         return 1
@@ -79,7 +79,7 @@ function install_fuzz_txt() {
 }
 
 function install_cewl() {
-    install_git_tool_bundler "CeWL" "https://github.com/digininja/CeWL.git" "cewl.rb"
+    install_git_tool_bundler "CeWL" "https://github.com/digininja/CeWL.git" "cewl.rb" "ruby ruby-bundler" "" "" "cewl"
 }
 
 function install_crunch() {

@@ -43,6 +43,10 @@ function install_wfuzz() {
     install_pipx_tool_git "wfuzz" "https://github.com/xmendez/wfuzz.git"
 }
 
+function install_webfuzz() {
+    install_pipx_tool_git "webfuzz" "https://github.com/Goultarde/webfuzz.git"
+}
+
 function install_wenum() {
     install_pipx_tool_git "wenum" "https://github.com/WebFuzzForge/wenum" || return 1
     # wenum imports pkg_resources and the removed stdlib cgi module.
@@ -106,6 +110,14 @@ function install_subfinder() {
     install_go_tool "github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest"
 }
 
+function install_dnsx() {
+    install_go_tool "github.com/projectdiscovery/dnsx/cmd/dnsx@latest"
+}
+
+function install_alterx() {
+    install_go_tool "github.com/projectdiscovery/alterx/cmd/alterx@latest"
+}
+
 function install_katana() {
     install_go_tool "github.com/projectdiscovery/katana/cmd/katana@latest"
 }
@@ -142,6 +154,27 @@ function install_waybackurls() {
 
 function install_commix() {
     install_pipx_tool_git "commix" "https://github.com/commixproject/commix.git"
+}
+
+function install_glpwnme() {
+    if install_pipx_tool_git "glpwnme" "https://github.com/Orange-Cyberdefense/glpwnme.git"; then
+        return 0
+    fi
+
+    colorecho "  → Falling back to a python module wrapper for glpwnme"
+    python3 -m pip install --break-system-packages --quiet \
+        "git+https://github.com/Orange-Cyberdefense/glpwnme.git" || {
+        colorecho "  ✗ Warning: Failed to install glpwnme Python package"
+        return 1
+    }
+
+    mkdir -p /root/.local/bin
+    printf '%s\n' '#!/bin/sh' 'exec python3 -m glpwnme "$@"' > /root/.local/bin/glpwnme
+    chmod +x /root/.local/bin/glpwnme
+    ln -sf /root/.local/bin/glpwnme /usr/bin/glpwnme
+
+    add-aliases "glpwnme"
+    add-history "glpwnme"
 }
 
 function install_tplmap() {
@@ -270,7 +303,13 @@ function install_caido() {
     colorecho "  → Falling back to upstream release downloads"
     arch="$(uname -m)"
 
-    release_json="$(curl -fsSL https://api.caido.io/releases/latest 2>/dev/null)" || release_json=""
+    local release_file="/tmp/caido-release.json"
+    if download-retry "https://api.caido.io/releases/latest" "$release_file"; then
+        release_json="$(cat "$release_file")"
+        rm -f "$release_file"
+    else
+        release_json=""
+    fi
     if [ -z "$release_json" ]; then
         colorecho "  ✗ Warning: Failed to fetch Caido release metadata"
         return 0
@@ -332,7 +371,7 @@ print(cli[0])' <<<"$release_json")"
     if [ -n "$appimage_url" ]; then
         local appimage_name
         appimage_name="$(basename "$appimage_url")"
-        if curl -fsSL "$appimage_url" -o "/opt/tools/caido/${appimage_name}" 2>/dev/null; then
+        if download-retry "$appimage_url" "/opt/tools/caido/${appimage_name}"; then
             chmod +x "/opt/tools/caido/${appimage_name}" || true
             ln -sf "/opt/tools/caido/${appimage_name}" /opt/tools/bin/caido
         fi
@@ -341,7 +380,7 @@ print(cli[0])' <<<"$release_json")"
     if [ -n "$cli_url" ]; then
         local cli_archive
         cli_archive="/tmp/$(basename "$cli_url")"
-        if curl -fsSL "$cli_url" -o "$cli_archive" 2>/dev/null; then
+        if download-retry "$cli_url" "$cli_archive"; then
             if tar -xzf "$cli_archive" -C /opt/tools/bin 2>/dev/null; then
                 if [ -f /opt/tools/bin/caido-cli ]; then
                     chmod +x /opt/tools/bin/caido-cli || true
@@ -380,6 +419,10 @@ function install_wpscan() {
     add-history "wpscan"
 }
 
+function install_wpprobe() {
+    install_go_tool "github.com/Chocapikk/wpprobe@latest"
+}
+
 
 function install_eyewitness() {
     local tool_name="EyeWitness"
@@ -393,14 +436,14 @@ function install_eyewitness() {
     fi
 
     colorecho "  → Installing EyeWitness"
-    git clone --depth=1 "$git_url" "$repo_dir" || {
+    git-clone-retry "$git_url" "$repo_dir" 1 || {
         colorecho "  ✗ Warning: Failed to clone EyeWitness"
         return 1
     }
 
     python3 -m venv "$venv_dir" || return 1
     source "$venv_dir/bin/activate"
-    pip install --quiet selenium Pillow fuzzywuzzy python-Levenshtein requests netaddr || {
+    retry-command 3 "pip install EyeWitness requirements" pip install --quiet selenium Pillow fuzzywuzzy python-Levenshtein requests netaddr || {
         colorecho "  ✗ Warning: Failed to install EyeWitness requirements"
         deactivate
         return 1
@@ -427,8 +470,8 @@ function install_burpsuite() {
     install_pacman_tool "freetype2"
     local burp_dir="/opt/tools/BurpSuiteCommunity"
     mkdir -p "$burp_dir"
-    wget -q "https://portswigger.net/burp/releases/download?product=community&type=Jar" \
-        -O "${burp_dir}/BurpSuiteCommunity.jar"
+    download-retry "https://portswigger.net/burp/releases/download?product=community&type=Jar" \
+        "${burp_dir}/BurpSuiteCommunity.jar"
     file "${burp_dir}/BurpSuiteCommunity.jar" | grep -q "Java archive" \
         || { colorecho "  ✗ Downloaded file is not a valid JAR"; exit 1; }
     cp /opt/nihil/build/assets/burpsuite/conf.json "${burp_dir}/conf.json"
@@ -447,6 +490,7 @@ function install_burpsuite() {
     printf '#!/bin/bash\nexec %s -Dawt.useSystemAAFontSettings=lcd -Dswing.aatext=true -jar -Xmx4g /opt/tools/BurpSuiteCommunity/BurpSuiteCommunity.jar "$@"\n' "$java_bin" \
         > /opt/tools/bin/burpsuite
     chmod +x /opt/tools/bin/burpsuite
+    add-history "burpsuite"
     colorecho "  ✓ Burp Suite Community installed at ${burp_dir}"
 }
 
@@ -519,20 +563,20 @@ function install_ysoserial() {
 
     if command -v ysoserial >/dev/null 2>&1; then
         colorecho "  ✓ ysoserial already installed"
+        add-history "ysoserial"
         return 0
     fi
 
     colorecho "  → Installing ysoserial"
     mkdir -p "$jar_dir"
     local tag
-    tag=$(curl -Ls -o /dev/null -w '%{url_effective}' \
+    tag=$(retry-command 3 "resolve ysoserial latest tag" curl -Ls -o /dev/null -w '%{url_effective}' \
         "https://github.com/frohoff/ysoserial/releases/latest" | sed 's:.*/::' || true)
     if [ -z "$tag" ]; then
         colorecho "  ✗ Warning: Failed to resolve ysoserial version"
         return 0
     fi
-    if ! curl -fsSL "https://github.com/frohoff/ysoserial/releases/download/${tag}/ysoserial-all.jar" \
-            -o "$jar_file" 2>/dev/null; then
+    if ! download-retry "https://github.com/frohoff/ysoserial/releases/download/${tag}/ysoserial-all.jar" "$jar_file"; then
         colorecho "  ✗ Warning: Failed to download ysoserial"
         return 0
     fi
@@ -540,6 +584,7 @@ function install_ysoserial() {
     java_bin=$(command -v java 2>/dev/null || echo "java")
     printf '#!/bin/bash\nexec %s -jar %s "$@"\n' "$java_bin" "$jar_file" > /opt/tools/bin/ysoserial
     chmod +x /opt/tools/bin/ysoserial
+    add-history "ysoserial"
     colorecho "  ✓ ysoserial installed (${tag})"
 }
 
@@ -561,6 +606,7 @@ function install_mod_web() {
 
     colorecho "  [pipx] Web fuzzers / scanners:"
     install_wfuzz
+    install_webfuzz
     install_wenum
     install_arjun
     install_wafw00f
@@ -569,6 +615,7 @@ function install_mod_web() {
     install_cmsmap
     install_dirsearch
     install_commix
+    install_glpwnme
     install_mitmproxy
     install_bbot
     install_git_dumper
@@ -587,6 +634,8 @@ function install_mod_web() {
     install_nuclei
     install_httpx_pd
     install_subfinder
+    install_dnsx
+    install_alterx
     install_katana
     install_ffuf
     install_hakrawler
@@ -599,6 +648,7 @@ function install_mod_web() {
 
     colorecho "  [gem] CMS scanners:"
     install_wpscan
+    install_wpprobe
 
     colorecho "  [git] Scripts (clone + requirements):"
     install_ssrfmap

@@ -29,6 +29,7 @@ function install_bloodhound_ce_python() {
 function install_neo4j() {
   if command -v neo4j >/dev/null 2>&1; then
     colorecho "  ✓ neo4j already installed"
+    add-history "neo4j"
     return 0
   fi
 
@@ -37,14 +38,19 @@ function install_neo4j() {
   archlinux-java set java-11-openjdk
 
   # BloodHound requires Neo4j 4.4.x - Neo4j 5.x removed the db.indexes procedure
+  local neo4j_releases="/tmp/neo4j-releases.json"
   local neo4j_version
-  neo4j_version="$(curl -fsSL "https://api.github.com/repos/neo4j/neo4j/releases" |
+  download-retry "https://api.github.com/repos/neo4j/neo4j/releases" "$neo4j_releases" || true
+  neo4j_version="$(cat "$neo4j_releases" 2>/dev/null |
     jq -r 'first(.[] | select(.tag_name | startswith("4.4.")) | select(.prerelease | not) | .tag_name)' |
     sed 's/^4\.4\.//' | xargs -I{} echo "4.4.{}" 2>/dev/null)" || neo4j_version="4.4.40"
+  rm -f "$neo4j_releases"
   [ -z "${neo4j_version}" ] && neo4j_version="4.4.40"
   colorecho "  → Installing Neo4j ${neo4j_version}"
-  curl -fsSL "https://dist.neo4j.org/neo4j-community-${neo4j_version}-unix.tar.gz" |
-    tar -xz -C /opt/
+  local neo4j_archive="/tmp/neo4j-community-${neo4j_version}-unix.tar.gz"
+  download-retry "https://dist.neo4j.org/neo4j-community-${neo4j_version}-unix.tar.gz" "$neo4j_archive" || return 1
+  tar -xzf "$neo4j_archive" -C /opt/
+  rm -f "$neo4j_archive"
   # Wrappers exec plutot que des symlinks: les scripts Neo4j utilisent
   # dirname "$0" pour retrouver leur arborescence (jars, NEO4J_HOME).
   # Via un symlink, "$0" pointe vers /opt/tools/bin et la detection echoue
@@ -59,6 +65,7 @@ function install_neo4j() {
   # Neo4j system db is created). Once that db exists this silently no-ops, so the
   # bloodhound-ce launcher self-heals the password at runtime instead.
   neo4j-admin set-initial-password fly2own1 >/dev/null 2>&1 || true
+  add-history "neo4j"
 }
 
 function install_bloodhound_ce_desktop() {
@@ -91,7 +98,7 @@ function install_bloodhound_ce_desktop() {
   mkdir -p "${install_root}" "${sharphound_path}" "${azurehound_path}"
   curl_tempfile="$(mktemp)"
 
-  if ! curl -fsSL "https://api.github.com/repos/SpecterOps/BloodHound/releases" -o "${curl_tempfile}"; then
+  if ! download-retry "https://api.github.com/repos/SpecterOps/BloodHound/releases" "${curl_tempfile}"; then
     colorecho "  ✗ Warning: Failed to fetch BloodHound releases"
     rm -f "${curl_tempfile}"
     return 1
@@ -105,7 +112,7 @@ function install_bloodhound_ce_desktop() {
   fi
 
   rm -rf "${src_dir}"
-  if ! git clone --depth 1 --branch "${tag_name}" "https://github.com/SpecterOps/BloodHound.git" "${src_dir}"; then
+  if ! git-clone-retry "https://github.com/SpecterOps/BloodHound.git" "${src_dir}" 1 3 "${tag_name}"; then
     colorecho "  ✗ Warning: Failed to clone BloodHound source"
     rm -f "${curl_tempfile}"
     return 1
@@ -146,18 +153,18 @@ function install_bloodhound_ce_desktop() {
 
   # SharpHound
   local sharphound_url sharphound_name
-  curl -fsSL "https://api.github.com/repos/BloodHoundAD/SharpHound/releases/latest" -o "${curl_tempfile}"
+  download-retry "https://api.github.com/repos/BloodHoundAD/SharpHound/releases/latest" "${curl_tempfile}" || true
   sharphound_url="$(jq -r '.assets[].browser_download_url | select(contains("debug") | not) | select(contains("sha256") | not)' "${curl_tempfile}")"
   sharphound_name="$(jq -r '.assets[].name | ascii_downcase | select(contains("debug") | not) | select(contains("sha256") | not)' "${curl_tempfile}")"
   if [ -n "${sharphound_url}" ]; then
-    wget -q --directory-prefix "${sharphound_path}" "${sharphound_url}"
+    download-retry "${sharphound_url}" "${sharphound_path}/$(basename "${sharphound_url}")" || true
     mv "${sharphound_path}/$(basename "${sharphound_url}")" "${sharphound_path}/${sharphound_name}" 2>/dev/null || true
     sha256sum "${sharphound_path}/${sharphound_name}" >"${sharphound_path}/${sharphound_name}.sha256"
   fi
 
   # AzureHound
   local azurehound_version azurehound_url_amd64 azurehound_url_amd64_sha256 azurehound_url_arm64 azurehound_url_arm64_sha256
-  curl -fsSL "https://api.github.com/repos/BloodHoundAD/AzureHound/releases/latest" -o "${curl_tempfile}"
+  download-retry "https://api.github.com/repos/BloodHoundAD/AzureHound/releases/latest" "${curl_tempfile}" || true
   azurehound_version="$(jq -r '.tag_name' "${curl_tempfile}")"
   azurehound_url_amd64="$(jq -r '.assets[].browser_download_url | select(endswith("_linux_amd64.zip"))' "${curl_tempfile}")"
   azurehound_url_amd64_sha256="$(jq -r '.assets[].browser_download_url | select(endswith("_linux_amd64.zip.sha256"))' "${curl_tempfile}")"
@@ -165,8 +172,10 @@ function install_bloodhound_ce_desktop() {
   azurehound_url_arm64_sha256="$(jq -r '.assets[].browser_download_url | select(endswith("_linux_arm64.zip.sha256"))' "${curl_tempfile}")"
   rm -f "${curl_tempfile}"
   if [ -n "${azurehound_url_amd64}" ]; then
-    wget -q --directory-prefix "${azurehound_path}" "${azurehound_url_amd64}" "${azurehound_url_amd64_sha256}"
-    wget -q --directory-prefix "${azurehound_path}" "${azurehound_url_arm64}" "${azurehound_url_arm64_sha256}"
+    download-retry "${azurehound_url_amd64}" "${azurehound_path}/$(basename "${azurehound_url_amd64}")" || true
+    download-retry "${azurehound_url_amd64_sha256}" "${azurehound_path}/$(basename "${azurehound_url_amd64_sha256}")" || true
+    download-retry "${azurehound_url_arm64}" "${azurehound_path}/$(basename "${azurehound_url_arm64}")" || true
+    download-retry "${azurehound_url_arm64_sha256}" "${azurehound_path}/$(basename "${azurehound_url_arm64_sha256}")" || true
     (cd "${azurehound_path}" && sha256sum --check --warn ./*.sha256) || return 1
     7z a -tzip -mx9 "${azurehound_path}/azurehound-${azurehound_version}.zip" "${azurehound_path}/azurehound-*"
     sha256sum "${azurehound_path}/azurehound-${azurehound_version}.zip" >"${azurehound_path}/azurehound-${azurehound_version}.zip.sha256"
@@ -229,7 +238,7 @@ function install_bloodhound_legacy_desktop() {
   mkdir -p "${install_root}"
   curl_tempfile="$(mktemp)"
 
-  if ! curl -fsSL "https://api.github.com/repos/BloodHoundAD/BloodHound/releases/latest" -o "${curl_tempfile}"; then
+  if ! download-retry "https://api.github.com/repos/BloodHoundAD/BloodHound/releases/latest" "${curl_tempfile}"; then
     colorecho "  ✗ Warning: Failed to fetch BloodHound legacy release"
     rm -f "${curl_tempfile}"
     return 1
@@ -245,7 +254,7 @@ function install_bloodhound_legacy_desktop() {
   fi
 
   zip_tempfile="$(mktemp --suffix=.zip)"
-  if ! curl -fsSL "${asset_url}" -o "${zip_tempfile}"; then
+  if ! download-retry "${asset_url}" "${zip_tempfile}"; then
     colorecho "  ✗ Warning: Failed to download BloodHound legacy ${tag_name}"
     rm -f "${zip_tempfile}"
     return 1
@@ -284,12 +293,39 @@ function install_bloodhound_legacy_desktop() {
   colorecho "  ✓ bloodhound-legacy installed (${tag_name})"
 }
 
+# Authenticode signer for Windows PE/MSI files (needs a PFX, no Windows/signtool
+# required). Pairs with certipy/pkinittools: once AD CS hands out a code-signing
+# cert, this is what actually signs the payload that a deployment pipeline
+# (MDT/SCCM/custom MSI portal, cf. sccmhunter) will trust. Not packaged for
+# Arch and AUR needs systemd we don't have in the container, so build from
+# upstream source via CMake.
+function install_osslsigncode() {
+  if command -v osslsigncode >/dev/null 2>&1; then
+    colorecho "  ✓ osslsigncode already installed"
+    add-aliases "osslsigncode"
+    add-history "osslsigncode"
+    return 0
+  fi
+
+  colorecho "  → Installing osslsigncode from source (CMake build)"
+  install_pacman_tools cmake openssl curl || return 1
+
+  install_git_tool "osslsigncode" \
+    "https://github.com/mtrojnar/osslsigncode.git" \
+    "" \
+    "cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j\$(nproc) && cmake --install build"
+}
+
 function install_ldapdomaindump() {
   install_pipx_tool "ldapdomaindump" "ldapdomaindump"
 }
 
 function install_adidnsdump() {
   install_pipx_tool "adidnsdump" "adidnsdump"
+}
+
+function install_adcheck() {
+  install_pipx_tool_git "adcheck" "https://github.com/CobblePot59/ADcheck.git"
 }
 
 function install_certipy() {
@@ -322,6 +358,7 @@ function install_evil_winrm() {
 
 function install_asrepcatcher() {
     install_pipx_tool_git "ASRepCatcher" "https://github.com/Yaxxine7/ASRepCatcher"
+    add-history "asrepcatcher"
 }
 
 function install_autobloody() {
@@ -363,6 +400,7 @@ function install_gpp_decrypt() {
 function install_keepwn() {
     # pipx registers the entry point as "KeePwn" (capital K+P), not "keepwn"
     install_pipx_tool_git "KeePwn" "https://github.com/Orange-Cyberdefense/KeePwn"
+    add-history "keepwn"
 }
 
 function install_krbjack() {
@@ -400,11 +438,13 @@ function install_pygpoabuse() {
 function install_sccmhunter() {
     if command -v sccmhunter > /dev/null 2>&1 || command -v sccmhunter.py > /dev/null 2>&1; then
         colorecho "  ✓ sccmhunter already installed (pipx)"
+        add-history "sccmhunter"
         return 0
     fi
     # pipx registers the entry point as "sccmhunter.py" (from pyproject.toml console_scripts)
     install_pipx_tool_git "sccmhunter.py" "https://github.com/garrettfoster13/sccmhunter.git" || return 1
     ln -sf "/root/.local/bin/sccmhunter.py" "/usr/bin/sccmhunter" 2>/dev/null || true
+    add-history "sccmhunter"
 }
 
 function install_teamsphisher() {
@@ -414,8 +454,7 @@ function install_teamsphisher() {
 function install_netexec() {
   # Ensure Rust is available (required to build NetExec native extensions)
   if ! command -v rustc >/dev/null 2>&1; then
-    pacman -Sy --noconfirm &&
-      pacman -S --noconfirm --needed rust || {
+    install_pacman_tool rust || {
       colorecho "  ✗ Warning: Failed to install rust for NetExec"
       return 1
     }
@@ -427,7 +466,45 @@ function install_netexec() {
 }
 
 function install_impacket() {
-  install_pipx_tool_git "impacket" "https://github.com/fortra/impacket.git"
+  _ensure_pipx || return 1
+
+  colorecho "  → Installing impacket via pipx from Git"
+  retry-command 3 "pipx install impacket" pipx install "git+https://github.com/fortra/impacket.git" --force || {
+    colorecho "  ✗ Warning: Failed to install impacket via pipx"
+    return 1
+  }
+  pipx inject impacket "setuptools<81" >/dev/null 2>&1 || true
+
+  local pipx_home
+  pipx_home="$(pipx environment --value PIPX_HOME 2>/dev/null || printf '%s\n' /root/.local/share/pipx)"
+  local impacket_bin="${pipx_home}/venvs/impacket/bin"
+  local wrapper_dir="/opt/tools/bin"
+  mkdir -p "$wrapper_dir"
+
+  local script cmd base name
+  for script in "$impacket_bin"/*.py; do
+    [ -x "$script" ] || continue
+    cmd="$(basename "$script")"
+    base="${cmd%.py}"
+    for name in "$cmd" "$base" "impacket-$base"; do
+      case "$name" in
+        net|ping|ping6|smbclient|split)
+          # Keep system commands available under their normal names. Impacket
+          # remains available through its .py and impacket- prefixed wrappers.
+          rm -f "${wrapper_dir}/${name}"
+          continue
+          ;;
+      esac
+      cat > "${wrapper_dir}/${name}" <<EOF
+#!/bin/sh
+exec "$script" "\$@"
+EOF
+      chmod +x "${wrapper_dir}/${name}"
+    done
+  done
+
+  add-aliases "impacket"
+  add-history "impacket"
 }
 
 function install_mitm6() {
@@ -491,6 +568,8 @@ function install_smbclientng() {
 
 function install_smbclient() {
   install_pacman_tool "smbclient"
+  install_pacman_tool "samba"
+  add-history "smbclient"
 }
 
 function install_python_pcapy() {
@@ -499,6 +578,23 @@ function install_python_pcapy() {
 
 function install_responder() {
   install_aur_tool "responder" "responder"
+  cat > /usr/local/bin/responder-http-off <<'EOF'
+#!/bin/sh
+sed -i 's/^HTTP = On/HTTP = Off/' /usr/share/responder/Responder.conf /etc/responder/Responder.conf 2>/dev/null || true
+EOF
+  cat > /usr/local/bin/responder-http-on <<'EOF'
+#!/bin/sh
+sed -i 's/^HTTP = Off/HTTP = On/' /usr/share/responder/Responder.conf /etc/responder/Responder.conf 2>/dev/null || true
+EOF
+  cat > /usr/local/bin/responder-smb-off <<'EOF'
+#!/bin/sh
+sed -i 's/^SMB = On/SMB = Off/' /usr/share/responder/Responder.conf /etc/responder/Responder.conf 2>/dev/null || true
+EOF
+  cat > /usr/local/bin/responder-smb-on <<'EOF'
+#!/bin/sh
+sed -i 's/^SMB = Off/SMB = On/' /usr/share/responder/Responder.conf /etc/responder/Responder.conf 2>/dev/null || true
+EOF
+  chmod +x /usr/local/bin/responder-http-off /usr/local/bin/responder-http-on /usr/local/bin/responder-smb-off /usr/local/bin/responder-smb-on
 }
 
 function install_rusthound_ce() {
@@ -519,10 +615,37 @@ function install_kerbrute() {
 
 function install_gofenrir() {
   install_go_tool "github.com/0xbbuddha/GoFenrir/cmd/gf@latest"
+  add-history "gofenrir"
 }
 
 function install_krbrelayx() {
-  install_git_tool_venv "krbrelayx" "https://github.com/dirkjanm/krbrelayx.git" "krbrelayx.py addspn.py printerbug.py dnstool.py" "dnspython ldap3 impacket dsinternals" "yes"
+  install_git_tool_venv "krbrelayx" "https://github.com/dirkjanm/krbrelayx.git" "krbrelayx.py addspn.py printerbug.py dnstool.py" "setuptools<81 dnspython ldap3 impacket dsinternals" "yes" || return 1
+
+  # krbrelayx still calls setAddComputerSMB(), while some Impacket versions no
+  # longer expose it on the inherited config class. Keep a no-op compatibility
+  # method so krbrelayx can start with the current Impacket shipped in Nihil.
+  local krbrelayx_config="${GIT_INSTALL_DIR:-/usr/local/share}/krbrelayx/lib/utils/config.py"
+  if [ -f "$krbrelayx_config" ] && ! grep -q "def setAddComputerSMB" "$krbrelayx_config"; then
+    python3 - "$krbrelayx_config" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+compat = (
+    "    def setAddComputerSMB(self, value):\n"
+    "        self.addComputerSMB = value\n\n"
+)
+if compat not in text:
+    marker = "    def setAuthOptions("
+    index = text.find(marker)
+    if index == -1:
+        raise SystemExit(f"setAuthOptions marker not found in {path}")
+    text = text[:index] + compat + text[index:]
+    path.write_text(text)
+PY
+    colorecho "  ✓ Patched krbrelayx Impacket config compatibility"
+  fi
 }
 
 function install_gmsadumper() {
@@ -542,6 +665,7 @@ function install_powershell() {
 function install_ldapsearch_ad() {
   install_pipx_tool "ldapsearch-ad.py" "ldapsearchad"
   add-symlink "/root/.local/bin/ldapsearch-ad.py" "ldapsearch-ad"
+  add-history "ldapsearch-ad"
 }
 
 function install_windapsearch() {
@@ -586,10 +710,15 @@ function install_pre2k() {
 
 function install_powerview_py() {
   install_pipx_tool_git "powerview" "https://github.com/aniqfakhrul/powerview.py"
+  add-history "powerview.py"
 }
 
 function install_tdo_dump() {
   install_pipx_tool_git "tdo-dump" "https://github.com/Goultarde/tdo_dump"
+}
+
+function install_tombstone() {
+  install_pipx_tool_git "tombstone" "https://github.com/Goultarde/Tombstone.py.git"
 }
 
 function install_shadowcoerce() {
@@ -624,6 +753,7 @@ function install_mod_ad() {
   install_bloodhound_ce_python
   install_ldapdomaindump
   install_adidnsdump
+  install_adcheck
   install_certipy
   install_bloodyad
   install_bloodhound_import
@@ -670,6 +800,7 @@ function install_mod_ad() {
   install_pre2k
   install_powerview_py
   install_tdo_dump
+  install_tombstone
 
   colorecho "  [pacman] AD tools:"
   install_krb5
@@ -682,6 +813,7 @@ function install_mod_ad() {
   colorecho "  [source-build] AD tools:"
   install_bloodhound_ce_desktop
   install_bloodhound_legacy_desktop
+  install_osslsigncode
 
   colorecho "  [AUR] AD tools:"
   install_responder

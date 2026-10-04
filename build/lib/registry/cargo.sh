@@ -41,17 +41,19 @@ install_cargo_tool() {
 
     if command -v "$tool_name" >/dev/null 2>&1; then
         colorecho "  ✓ $tool_name already installed (cargo)"
+        add-aliases "$tool_name"
+        add-history "$tool_name"
         return 0
     fi
 
     colorecho "  → Installing $tool_name via cargo"
     # Utiliser --locked pour éviter les problèmes de versions
     # et augmenter le timeout pour les gros projets
-    CARGO_NET_GIT_FETCH_WITH_CLI=true \
-    cargo install --locked "$tool_name" || {
+    retry-command 3 "cargo install --locked $tool_name" \
+        env CARGO_NET_GIT_FETCH_WITH_CLI=true cargo install --locked "$tool_name" || {
         colorecho "  ✗ Warning: Failed to install $tool_name via cargo"
         colorecho "  → Trying without --locked flag..."
-        cargo install "$tool_name" || {
+        retry-command 3 "cargo install $tool_name" cargo install "$tool_name" || {
             colorecho "  ✗ Failed to install $tool_name (both methods failed)"
             return 1
         }
