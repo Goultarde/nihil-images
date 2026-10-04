@@ -2,6 +2,7 @@
   "version": 2,
   "enabled_tools": [
     "asciinema",
+    "bloodyad",
     "fzf",
     "gdb",
     "nano",
